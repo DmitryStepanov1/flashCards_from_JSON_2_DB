@@ -46,7 +46,7 @@ func fileValidation(fileName string) (bool, string) {
 		return true, fileNameParts[len(fileNameParts)-1]
 	}
 
-	fmt.Println("unsupported file format. Please use any of next formats: TXT, CSV or JSON")
+	fmt.Println("unsupported file format. Please use any of next formats: JSON")
 	return false, ""
 
 }
@@ -77,30 +77,29 @@ func jsonValidation(inputString string) (inputMap map[string]string) {
 // provides dictation from map for user and exits the program when finish
 func dictation(m map[string]string) {
 
+	scanner := bufio.NewScanner(os.Stdin)
+
 	for {
-
-		scanner := bufio.NewScanner(os.Stdin)
 		v := randomWord(m)
+		//fmt.Printf("Translate \"%s\": ", v)
 
-	jumpTo:
-
-		fmt.Print("> ")
 		scanner.Scan()
 		input := scanner.Text()
 
-		// Check if the user wants to finish dictation
-		if input == "exit" {
+	jumpTo:
+
+		if input == "exit" { // checks if user wants to finish dictation
 			break
 		} else if input == v {
-			fmt.Println("Correct! Try next word")
-			continue
+			fmt.Println("Correct! Try the next word.")
 		} else {
 			fmt.Println("Wrong, try again")
+			scanner.Scan()
+			input = scanner.Text()
 			goto jumpTo
 		}
 
 	}
-
 }
 
 // provides random word from map for dictation
@@ -108,8 +107,7 @@ func randomWord(m map[string]string) string {
 	//k := rand.Intn(len(m))
 
 	for i, v := range m {
-		s := fmt.Sprintf("Переведи %s:", i)
-		fmt.Println(s)
+		fmt.Printf("Translate %s: ", i)
 		return v
 	}
 
@@ -126,6 +124,30 @@ const (
 	dbname   = "postgres"
 )
 
+func loadDictionaryFromDB(db *sql.DB) (map[string]string, error) {
+	query := "SELECT key, value FROM dictionary"
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("error querying the database: %v", err)
+	}
+	defer rows.Close()
+
+	dictionary := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, fmt.Errorf("error scanning row: %v", err)
+		}
+		dictionary[key] = value
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %v", err)
+	}
+
+	return dictionary, nil
+}
+
 func main() {
 
 	// Connect to the PostgreSQL database
@@ -141,29 +163,41 @@ func main() {
 	// Create a new scanner to read from standard input
 	scanner := bufio.NewScanner(os.Stdin)
 
-jumpTo:
+	var m map[string]string
 
-	fmt.Println("Enter file to parse:")
+	for {
 
-	// Scan for the next token (which is a line)
-	scanner.Scan()
+		fmt.Println("Enter file to parse:")
 
-	inputString := scanner.Text()
+		// Scan for the next token (which is a line)
+		scanner.Scan()
 
-	if scanner.Text() == "exit" {
-		os.Exit(0)
+		inputString := scanner.Text()
+
+		if scanner.Text() == "exit" {
+			os.Exit(0)
+		}
+
+		fValid, _ := fileValidation(inputString)
+
+		if !fValid {
+			continue
+		}
+
+		m = jsonValidation(inputString)
+
+		if len(m) == 0 {
+			continue
+		}
+
+		break
 	}
 
-	fValid, _ := fileValidation(inputString)
-
-	if fValid == false {
-		goto jumpTo
-	}
-
-	m := jsonValidation(inputString)
-
-	if len(m) == 0 {
-		goto jumpTo
+	// Setup: create a table and insert some test data
+	_, err = db.Exec("CREATE TABLE IF NOT EXISTS dictionary (key TEXT, value TEXT)")
+	if err != nil {
+		fmt.Printf("Failed to create table: %v", err)
+		return
 	}
 
 	// Insert data into the PostgreSQL table
@@ -175,13 +209,18 @@ jumpTo:
 		}
 	}
 
-	fmt.Println("You've uploaded next words from dictionary:")
+	fmt.Println("You've uploaded next words:")
 	for key, value := range m {
 		fmt.Printf("%s: %s\n", key, value)
 	}
 	fmt.Println("Now the dictation starts.")
 
-	dictation(m)
+	// Dictation from map:
+	//dictation(m)
+
+	// If you need dictation from DB:
+	n, _ := loadDictionaryFromDB(db)
+	dictation(n)
 
 	fmt.Println("It was a pleasure to work with you, see ya!")
 
